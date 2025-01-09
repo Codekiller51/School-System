@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <link rel="stylesheet" href="css/signup.css">
+</head>
+
+<body>
+    <div class="site" id="page">
+        <div class="container">
+            <div class="form-box">
+                <div class="progress">
+                    <div class="logo"><a href="#"><span>School </span>Login</a></div>
+                    <div class="logoimg">
+                        <img src="Asset/logo/1.webp" alt="Logo">
+                    </div>
+                </div>
+                <form action="" method="POST">
+                    <div class="form-content active">
+                        <center>
+                            <div class="bg-svg">
+                                <img src="Asset/icons/Person.png" alt="School Logo" class="img">
+                            </div>
+                            <h2>Welcome Back</h2>
+                            <p>Enter your credentials to log in</p>
+                        </center>
+                        <div>
+                            <label for="username">Email & Username</label>
+                            <input type="text" id="username" name="username" placeholder="Enter your Email & Username" required>
+                        </div>
+                        <div>
+                            <label for="password">Password</label>
+                            <input type="password" id="password" name="password" placeholder="Enter your password"
+                                required>
+                        </div>
+                        <div class="checkbox">
+                            <input type="checkbox" id="remember-me" name="remember-me">
+                            <label for="remember-me">Remember me</label>
+                        </div>
+
+                    </div>
+                    <div class="btn-group center">
+                        <button type="submit" class="btn-login">Login</button>
+                    </div>
+                    <center>
+                        <p></p>
+                        <p class="signup-prompt">
+                            <a href="#">Forgot your password?</a><br><br>
+                            Don’t have an account? <a href="signup.html">Sign Up</a>
+                        </p>
+                    </center>
+                </form>
+
+            </div>
+        </div>
+    </div>
+    <script src="js/login.js"></script>
+</body>
+
+</html>
