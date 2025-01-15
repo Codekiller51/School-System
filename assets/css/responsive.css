@@ -1,0 +1,143 @@
+/* Responsive Design */
+@media (max-width: 1240px) {
+    .sidebar {
+        width: 78px;
+    }
+    
+    .sidebar.close {
+        width: 0;
+    }
+    
+    .sidebar .logo-details .logo_name,
+    .sidebar .nav-links li a .link_name {
+        opacity: 0;
+        pointer-events: none;
+    }
+    
+    .home-section {
+        left: 78px;
+        width: calc(100% - 78px);
+    }
+    
+    .sidebar.close ~ .home-section {
+        left: 0;
+        width: 100%;
+    }
+}
+
+@media (max-width: 1150px) {
+    .home-content .sales-boxes {
+        flex-direction: column;
+    }
+    
+    .home-content .sales-boxes .box {
+        width: 100%;
+        margin-bottom: 20px;
+    }
+}
+
+@media (max-width: 1000px) {
+    .overview-boxes {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .overview-boxes {
+        grid-template-columns: 1fr;
+    }
+    
+    .sidebar {
+        width: 0;
+    }
+    
+    .sidebar.close {
+        width: 78px;
+    }
+    
+    .home-section {
+        left: 0;
+        width: 100%;
+    }
+    
+    .sidebar.close ~ .home-section {
+        left: 78px;
+        width: calc(100% - 78px);
+    }
+    
+    .home-section nav {
+        padding: 0 10px;
+    }
+    
+    .home-section nav .search-box {
+        margin: 0 10px;
+    }
+    
+    .home-section nav .profile-details .admin_name {
+        display: none;
+    }
+    
+    .profile-dropdown {
+        right: 10px;
+    }
+}
+
+@media (max-width: 550px) {
+    .overview-boxes .box {
+        padding: 15px;
+    }
+    
+    .sidebar.close ~ .home-section nav {
+        padding: 0;
+        width: 100%;
+    }
+    
+    .home-section nav .search-box {
+        display: none;
+    }
+    
+    .home-content {
+        padding: 10px;
+    }
+    
+    .box .number {
+        font-size: 24px;
+    }
+    
+    .box .indicator {
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 400px) {
+    .sidebar {
+        width: 0;
+    }
+    
+    .sidebar.close {
+        width: 0;
+    }
+    
+    .home-section {
+        left: 0;
+        width: 100%;
+    }
+    
+    .sidebar.close ~ .home-section {
+        left: 0;
+        width: 100%;
+    }
+    
+    .home-section nav {
+        justify-content: space-between;
+    }
+    
+    .home-section nav .profile-details img {
+        height: 30px;
+        width: 30px;
+    }
+    
+    .profile-dropdown {
+        width: 180px;
+    }
+}
