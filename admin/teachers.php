@@ -10,7 +10,6 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
 
 $error = null;
 $teachers = [];
-$dept_stats = [];
 $total_pages = 1;
 $page = 1;
 $search = '';
@@ -20,17 +19,22 @@ try {
     // Test database connection first
     $test_query = "SELECT 1 FROM teachers LIMIT 1";
     $conn->query($test_query);
+    
+     // Get admin info
+     $admin_id = $_SESSION['user_id'];
+     $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+     $stmt->execute([$admin_id]);
+     $admin = $stmt->fetch();
 
     // Initialize variables for pagination
     $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-    $limit = 10;
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 10;
     $offset = ($page - 1) * $limit;
 
     // Search functionality
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 
-    // Simple query first to test
     $query = "SELECT * FROM teachers";
     $params = [];
 
@@ -48,44 +52,36 @@ try {
         $params[] = $status_filter;
     }
 
-    // Add pagination
-    $query .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
-    $params[] = $limit;
-    $params[] = $offset;
+    // Add pagination directly to the query
+    $query .= " ORDER BY created_at DESC LIMIT $limit OFFSET $offset";
 
-    // Get total count for pagination
-    $count_query = "SELECT COUNT(*) as total FROM teachers";
-    if (!empty($params)) {
-        $count_query = str_replace(" ORDER BY created_at DESC LIMIT ? OFFSET ?", "", $query);
-    }
-    
-    $stmt = $conn->prepare($count_query);
-    if (!empty($params)) {
-        // Remove the limit and offset parameters for the count query
-        $count_params = array_slice($params, 0, -2);
-        $stmt->execute($count_params);
-    } else {
-        $stmt->execute();
-    }
-    $total_records = $stmt->fetch()['total'];
-    $total_pages = ceil($total_records / $limit);
-
-    // Execute main query
+    // Prepare and execute the query
     $stmt = $conn->prepare($query);
     $stmt->execute($params);
     $teachers = $stmt->fetchAll();
 
-    // Get department statistics with simplified query
-    $dept_query = "SELECT department, COUNT(*) as count FROM teachers GROUP BY department";
-    $dept_stats = $conn->query($dept_query)->fetchAll();
+    // Get total count for pagination
+    $count_query = "SELECT COUNT(*) as total FROM teachers";
+    if (!empty($params)) {
+        $count_query = str_replace(" ORDER BY created_at DESC LIMIT $limit OFFSET $offset", "", $query);
+    }
+    
+    $count_stmt = $conn->prepare($count_query);
+    if (!empty($params)) {
+        // Remove the limit and offset parameters for the count query
+        $count_params = array_slice($params, 0, -2);
+        $count_stmt->execute($count_params);
+    } else {
+        $count_stmt->execute();
+    }
+    $total_records = $count_stmt->fetchColumn();
+    $total_pages = ceil($total_records / $limit);
 
 } catch (PDOException $e) {
-    error_log("Database Error in Teachers Management: " . $e->getMessage());
-    $error = "A database error occurred: " . $e->getMessage();
-} catch (Exception $e) {
-    error_log("General Error in Teachers Management: " . $e->getMessage());
-    $error = "An error occurred: " . $e->getMessage();
+    $error = "Database Error: " . $e->getMessage();
 }
+
+// Include the HTML template to display the data
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -308,7 +304,7 @@ try {
                 
                 <div class="search-box">
                     <i class='bx bx-search'></i>
-                    <input type="text" placeholder="Quick search...">
+                    <input type="text" placeholder="Search...">
                 </div>
                 
                 <div class="user-profile">
@@ -325,7 +321,10 @@ try {
             <?php else: ?>
                 <!-- Department Statistics -->
                 <div class="stats-cards">
-                    <?php foreach ($dept_stats as $stat): ?>
+                    <?php 
+                    $dept_query = "SELECT department, COUNT(*) as count FROM teachers GROUP BY department";
+                    $dept_stats = $conn->query($dept_query)->fetchAll();
+                    foreach ($dept_stats as $stat): ?>
                         <div class="stats-card">
                             <h3><?php echo htmlspecialchars($stat['department']); ?></h3>
                             <p><?php echo $stat['count']; ?> Teachers</p>
