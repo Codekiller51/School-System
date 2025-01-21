@@ -1,82 +1,144 @@
 <?php
-session_start();
-require_once '../config/database.php';
-require_once '../includes/functions.php';
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
-// Redirect if already logged in
+// Start session
+session_start();
+
+// Database connection
+try {
+    require_once '../config/database.php';
+    
+    // Verify database connection
+    if (!$conn || $conn->connect_error) {
+        throw new Exception("Database connection failed: " . ($conn ? $conn->connect_error : "Connection not established"));
+    }
+} catch (Exception $e) {
+    die("Connection failed: " . $e->getMessage());
+}
+
+// Check if already logged in
 if (isset($_SESSION['user_id'])) {
-    redirectBasedOnRole($_SESSION['role']);
+    $role = $_SESSION['role'] ?? '';
+    try {
+        switch ($role) {
+            case 'administrator':
+                header('Location: ../admin/index.php');
+                break;
+            case 'teacher':
+                header('Location: ../teacher/index.php');
+                break;
+            case 'student':
+                header('Location: ../student/index.php');
+                break;
+            default:
+                // Invalid role in session, clear session
+                session_unset();
+                session_destroy();
+                throw new Exception("Invalid role in session");
+        }
+        exit();
+    } catch (Exception $e) {
+        $error = "Session error: " . $e->getMessage();
+    }
 }
 
 $error = '';
 $success = '';
 
+// Handle login request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = $_POST['email'] ?? '';
-    $password = $_POST['password'] ?? '';
-    $role = $_POST['role'] ?? '';
-
-    if (empty($email) || empty($password) || empty($role)) {
-        $error = 'All fields are required';
-    } else {
-        try {
-            // Determine table based on role
-            $table = match ($role) {
-                'student' => 'students',
-                'teacher' => 'teachers',
-                'admin' => 'administrators',
-                'parent' => 'parents',
-                default => null
-            };
-
-            if ($table) {
-                $stmt = $conn->prepare("
-                    SELECT id, email, password, first_name, last_name, status
-                    FROM $table 
-                    WHERE email = ? AND status = 'active'
-                ");
-                $stmt->execute([$email]);
-                $user = $stmt->fetch();
-
-                if ($user && password_verify($password, $user['password'])) {
-                    // Set session variables
-                    $_SESSION['user_id'] = $user['id'];
-                    $_SESSION['name'] = $user['first_name'] . ' ' . $user['last_name'];
-                    $_SESSION['role'] = $role;
-                    $_SESSION['email'] = $user['email'];
-
-                    // Log login activity
-                    $stmt = $conn->prepare("
-                        INSERT INTO notification_logs (student_id, notification_type, notification_method, status, message)
-                        VALUES (?, 'login', 'system', 'sent', ?)
-                    ");
-                    $message = "User logged in from IP: " . $_SERVER['REMOTE_ADDR'];
-                    $stmt->execute([$user['id'], $message]);
-
-                    // Redirect based on role
-                    redirectBasedOnRole($role);
-                } else {
-                    $error = 'Invalid email or password';
-                    
-                    // Log failed attempt
-                    if ($user) {
-                        $stmt = $conn->prepare("
-                            INSERT INTO notification_logs (student_id, notification_type, notification_method, status, message)
-                            VALUES (?, 'failed_login', 'system', 'sent', ?)
-                        ");
-                        $message = "Failed login attempt from IP: " . $_SERVER['REMOTE_ADDR'];
-                        $stmt->execute([$user['id'], $message]);
-                    }
-                }
-            } else {
-                $error = 'Invalid role selected';
-            }
-        } catch(PDOException $e) {
-            error_log("Login Error: " . $e->getMessage());
-            $error = 'Login failed. Please try again.';
+    try {
+        // Validate inputs
+        $email = filter_input(INPUT_POST, 'email', FILTER_VALIDATE_EMAIL);
+        $password = $_POST['password'] ?? '';
+        $role = $_POST['role'] ?? '';
+        
+        if (!$email) {
+            throw new Exception('Invalid email format');
         }
+        if (empty($password)) {
+            throw new Exception('Password is required');
+        }
+        if (empty($role)) {
+            throw new Exception('Role is required');
+        }
+
+        // Select appropriate table and query based on role
+        switch ($role) {
+            case 'administrator':
+                $table = 'administrators';
+                $query = "SELECT id, password, email FROM $table WHERE email = ?";
+                break;
+            case 'teacher':
+                $table = 'teachers';
+                $query = "SELECT id, password, email, status FROM $table WHERE email = ? AND status = 'Active'";
+                break;
+            case 'student':
+                $table = 'students';
+                $query = "SELECT id, password, email, status FROM $table WHERE email = ? AND status = 'Active'";
+                break;
+            default:
+                throw new Exception('Invalid role selected');
+        }
+        
+        // Check credentials
+        $stmt = $conn->prepare($query);
+        if (!$stmt) {
+            throw new Exception("Database error: " . $conn->error);
+        }
+        
+        $stmt->bind_param('s', $email);
+        if (!$stmt->execute()) {
+            throw new Exception("Query execution failed: " . $stmt->error);
+        }
+        
+        $result = $stmt->get_result();
+        if (!$result) {
+            throw new Exception("Failed to get result: " . $stmt->error);
+        }
+        
+        if ($result->num_rows === 0) {
+            throw new Exception("Invalid email or password");
+        }
+        
+        $user = $result->fetch_assoc();
+        
+        // Verify password
+        if (!password_verify($password, $user['password'])) {
+            throw new Exception("Invalid email or password");
+        }
+        
+        // Set session variables
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['role'] = $role;
+        $_SESSION['email'] = $user['email'];
+        
+        // Clear any existing error messages
+        unset($_SESSION['error']);
+        
+        // Redirect based on role
+        switch ($role) {
+            case 'administrator':
+                header('Location: ../admin/index.php');
+                break;
+            case 'teacher':
+                header('Location: ../teacher/index.php');
+                break;
+            case 'student':
+                header('Location: ../student/index.php');
+                break;
+        }
+        exit();
+        
+    } catch (Exception $e) {
+        $error = $e->getMessage();
+        // Log error for debugging
+        error_log("Login error: " . $error);
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -167,7 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" style="max-width: 70%;">
         <div class="login-container">
             <div class="row g-0">
                 <div class="col-lg-6">
@@ -196,9 +258,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     <i class='bx bx-group'></i>
                                     <div>Parent</div>
                                 </div>
-                                <div class="role-option" data-role="admin">
+                                <div class="role-option" data-role="administrator">
                                     <i class='bx bx-shield'></i>
-                                    <div>Admin</div>
+                                    <div>Administrator</div>
                                 </div>
                             </div>
                             <input type="hidden" name="role" id="selectedRole">
@@ -248,7 +310,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
                 <div class="col-lg-6" class="onmobile">
                     <div class="school-info h-100 d-flex flex-column justify-content-center p-5">
-                        <img src="../assets/img/school-logo.png" alt="School Logo" 
+                        <img src="../asset/logo/1.webp" alt="School Logo" 
                              class="img-fluid mb-4" style="max-width: 200px; margin: 0 auto;">
                         <h4 class="mb-4">School Management System</h4>
                         <p class="mb-4">

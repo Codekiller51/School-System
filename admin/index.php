@@ -2,8 +2,12 @@
 session_start();
 require_once('../config/database.php');
 
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 // Check if user is logged in and is an admin
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'administrator') {
     header('Location: ../auth/login.php');
     exit();
 }
@@ -11,77 +15,114 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
 try {
     // Get admin info
     $admin_id = $_SESSION['user_id'];
+    
+    // Check if administrators table exists
+    $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
+    if ($table_check->num_rows === 0) {
+        throw new Exception('Database table "administrators" not found');
+    }
+    
     $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
-    $stmt->execute([$admin_id]);
-    $admin = $stmt->fetch();
+    if (!$stmt) {
+        throw new Exception("Failed to prepare admin query: " . $conn->error);
+    }
+    
+    $stmt->bind_param('i', $admin_id);
+    if (!$stmt->execute()) {
+        throw new Exception("Failed to execute admin query: " . $stmt->error);
+    }
+    
+    $result = $stmt->get_result();
+    $admin = $result->fetch_assoc();
 
     if (!$admin) {
-        throw new Exception('Admin not found');
+        throw new Exception('Admin not found with ID: ' . $admin_id);
     }
 
-    // Get counts with prepared statements
+    // Initialize counts array
     $counts = [
         'teachers' => 0,
         'students' => 0,
-        'parents' => 0,
-        'subjects' => 0
+        'subjects' => 0,
+        'classes' => 0
     ];
 
-    // Get teachers count
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM teachers WHERE status = 'active'");
-    $stmt->execute();
-    $counts['teachers'] = $stmt->fetch()['count'] ?? 0;
+    // Function to safely get count from table
+    function getTableCount($conn, $table, $status = true) {
+        $count = 0;
+        try {
+            // Check if table exists
+            $table_check = $conn->query("SHOW TABLES LIKE '$table'");
+            if ($table_check->num_rows === 0) {
+                error_log("Table '$table' does not exist");
+                return 0;
+            }
+            
+            $query = $status ? 
+                "SELECT COUNT(*) as count FROM $table WHERE status = 'Active'" :
+                "SELECT COUNT(*) as count FROM $table";
+                
+            $result = $conn->query($query);
+            if ($result) {
+                $count = $result->fetch_assoc()['count'] ?? 0;
+            } else {
+                error_log("Error getting count from $table: " . $conn->error);
+            }
+        } catch (Exception $e) {
+            error_log("Error in getTableCount for $table: " . $e->getMessage());
+        }
+        return $count;
+    }
 
-    // Get students count
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM students WHERE status = 'active'");
-    $stmt->execute();
-    $counts['students'] = $stmt->fetch()['count'] ?? 0;
+    // Get counts safely
+    $counts['teachers'] = getTableCount($conn, 'teachers');
+    $counts['students'] = getTableCount($conn, 'students');
+    $counts['subjects'] = getTableCount($conn, 'subjects');
+    $counts['classes'] = getTableCount($conn, 'classes');
 
-    // Get parents count
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM parents WHERE status = 'active'");
-    $stmt->execute();
-    $counts['parents'] = $stmt->fetch()['count'] ?? 0;
+    // Get recent activities
+    $activities = [];
+    try {
+        // Check if notification_logs table exists
+        $table_check = $conn->query("SHOW TABLES LIKE 'notification_logs'");
+        if ($table_check->num_rows > 0) {
+            $stmt = $conn->prepare("
+                SELECT 
+                    nl.*,
+                    CASE 
+                        WHEN nl.user_type = 'teacher' THEN CONCAT(t.first_name, ' ', t.last_name)
+                        WHEN nl.user_type = 'student' THEN CONCAT(s.first_name, ' ', s.last_name)
+                        WHEN nl.user_type = 'administrator' THEN CONCAT(a.first_name, ' ', a.last_name)
+                        ELSE 'System'
+                    END as full_name,
+                    nl.user_type as role
+                FROM notification_logs nl
+                LEFT JOIN teachers t ON nl.user_id = t.id AND nl.user_type = 'teacher'
+                LEFT JOIN students s ON nl.user_id = s.id AND nl.user_type = 'student'
+                LEFT JOIN administrators a ON nl.user_id = a.id AND nl.user_type = 'administrator'
+                WHERE nl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                ORDER BY nl.created_at DESC 
+                LIMIT 5
+            ");
+            
+            if ($stmt->execute()) {
+                $result = $stmt->get_result();
+                while ($row = $result->fetch_assoc()) {
+                    $activities[] = $row;
+                }
+            } else {
+                error_log("Failed to execute activities query: " . $stmt->error);
+            }
+        } else {
+            error_log("Table 'notification_logs' does not exist");
+        }
+    } catch (Exception $e) {
+        error_log("Error fetching activities: " . $e->getMessage());
+    }
 
-    // Get subjects count
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM subjects");
-    $stmt->execute();
-    $counts['subjects'] = $stmt->fetch()['count'] ?? 0;
-
-    // Get recent activities with prepared statement
-    $activities_query = "
-        SELECT 
-            nl.*,
-            CASE 
-                WHEN nl.notification_type LIKE '%teacher%' THEN CONCAT(t.first_name, ' ', t.last_name)
-                WHEN nl.notification_type LIKE '%student%' THEN CONCAT(s.first_name, ' ', s.last_name)
-                WHEN nl.notification_type LIKE '%parent%' THEN CONCAT(p.first_name, ' ', p.last_name)
-                WHEN nl.notification_type LIKE '%admin%' THEN CONCAT(a.first_name, ' ', a.last_name)
-                ELSE 'System'
-            END as full_name,
-            CASE 
-                WHEN nl.notification_type LIKE '%teacher%' THEN 'teacher'
-                WHEN nl.notification_type LIKE '%student%' THEN 'student'
-                WHEN nl.notification_type LIKE '%parent%' THEN 'parent'
-                WHEN nl.notification_type LIKE '%admin%' THEN 'admin'
-                ELSE 'system'
-            END as role
-        FROM notification_logs nl
-        LEFT JOIN teachers t ON nl.student_id = t.id AND nl.notification_type LIKE '%teacher%'
-        LEFT JOIN students s ON nl.student_id = s.id AND nl.notification_type LIKE '%student%'
-        LEFT JOIN parents p ON nl.student_id = p.id AND nl.notification_type LIKE '%parent%'
-        LEFT JOIN administrators a ON nl.student_id = a.id AND nl.notification_type LIKE '%admin%'
-        ORDER BY nl.created_at DESC 
-        LIMIT 5
-    ";
-    
-    $activities = $conn->query($activities_query)->fetchAll();
-
-} catch (PDOException $e) {
-    error_log("Database Error in Admin Dashboard: " . $e->getMessage());
-    $error = "A database error occurred. Please try again later.";
 } catch (Exception $e) {
-    error_log("General Error in Admin Dashboard: " . $e->getMessage());
-    $error = $e->getMessage();
+    error_log("Error in Admin Dashboard: " . $e->getMessage());
+    $error = "An error occurred: " . $e->getMessage();
 }
 
 ?>
@@ -166,11 +207,13 @@ try {
             </header>
 
             <?php if (isset($error)): ?>
-                <div class="alert error">
+                <div class="alert alert-danger" style="margin: 20px; padding: 15px; border-radius: 5px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24;">
                     <i class='bx bx-error-circle'></i>
                     <?php echo htmlspecialchars($error); ?>
                 </div>
-            <?php else: ?>
+            <?php endif; ?>
+
+            <?php if (!isset($error)): ?>
                 <!-- Dashboard Cards -->
                 <div class="dashboard-cards">
                     <div class="card">
@@ -198,11 +241,11 @@ try {
                     </div>
 
                     <div class="card">
-                        <div class="card-icon" style="background: rgba(247, 37, 133, 0.1);">
-                            <i class='bx bxs-group' style="color: var(--warning-color);"></i>
+                        <div class="card-icon" style="background: rgba(63, 55, 201, 0.1);">
+                            <i class='bx bxs-book' style="color: var(--secondary-color);"></i>
                         </div>
-                        <div class="card-title">Total Parents</div>
-                        <div class="card-value"><?php echo number_format($counts['parents']); ?></div>
+                        <div class="card-title">Total Subjects</div>
+                        <div class="card-value"><?php echo number_format($counts['subjects']); ?></div>
                         <div class="card-change positive">
                             <i class='bx bx-up-arrow-alt'></i>
                             <span>Active</span>
@@ -210,11 +253,11 @@ try {
                     </div>
 
                     <div class="card">
-                        <div class="card-icon" style="background: rgba(63, 55, 201, 0.1);">
-                            <i class='bx bxs-book' style="color: var(--secondary-color);"></i>
+                        <div class="card-icon" style="background: rgba(255, 159, 67, 0.1);">
+                            <i class='bx bxs-school' style="color: #ff9f43;"></i>
                         </div>
-                        <div class="card-title">Total Subjects</div>
-                        <div class="card-value"><?php echo number_format($counts['subjects']); ?></div>
+                        <div class="card-title">Total Classes</div>
+                        <div class="card-value"><?php echo number_format($counts['classes']); ?></div>
                         <div class="card-change positive">
                             <i class='bx bx-up-arrow-alt'></i>
                             <span>Active</span>
@@ -254,7 +297,7 @@ try {
                                             </div>
                                         </td>
                                         <td><?php echo ucfirst($activity['role']); ?></td>
-                                        <td><?php echo ucfirst($activity['notification_type']); ?></td>
+                                        <td><?php echo htmlspecialchars($activity['message']); ?></td>
                                         <td><?php echo date('M d, h:i A', strtotime($activity['created_at'])); ?></td>
                                         <td><span class="status success">Success</span></td>
                                     </tr>

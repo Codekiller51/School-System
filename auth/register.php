@@ -1,10 +1,9 @@
 <?php
 session_start();
 require_once '../config/database.php';
-require_once '../includes/functions.php';
 
-// Only admin can access registration
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+// Only administrator can access registration
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'administrator') {
     header('Location: login.php');
     exit;
 }
@@ -14,155 +13,156 @@ $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $role = $_POST['role'] ?? '';
-        $email = $_POST['email'] ?? '';
+        // Basic information
+        $role = filter_input(INPUT_POST, 'role', FILTER_SANITIZE_STRING);
+        $email = filter_input(INPUT_POST, 'email', FILTER_VALIDATE_EMAIL);
         $password = $_POST['password'] ?? '';
         $confirmPassword = $_POST['confirm_password'] ?? '';
-        $firstName = $_POST['first_name'] ?? '';
-        $lastName = $_POST['last_name'] ?? '';
-        $phone = $_POST['phone'] ?? '';
-        $address = $_POST['address'] ?? '';
-        $dateOfBirth = $_POST['date_of_birth'] ?? '';
-        $gender = $_POST['gender'] ?? '';
-
-        // Role-specific fields
-        $employeeId = $_POST['employee_id'] ?? '';
-        $department = $_POST['department'] ?? '';
-        $qualification = $_POST['qualification'] ?? '';
-        $joiningDate = $_POST['joining_date'] ?? '';
-        $admissionNumber = $_POST['admission_number'] ?? '';
-        $classLevel = $_POST['class_level'] ?? '';
-        $section = $_POST['section'] ?? '';
-        $admissionDate = $_POST['admission_date'] ?? '';
-
-        // Basic validation
-        if (empty($role) || empty($email) || empty($password) || empty($firstName) || empty($lastName)) {
-            throw new Exception('All fields are required');
+        $firstName = filter_input(INPUT_POST, 'first_name', FILTER_SANITIZE_STRING);
+        $lastName = filter_input(INPUT_POST, 'last_name', FILTER_SANITIZE_STRING);
+        $phone = filter_input(INPUT_POST, 'phone', FILTER_SANITIZE_STRING);
+        
+        // Validate basic fields
+        if (!$email) {
+            throw new Exception('Invalid email format');
         }
-
+        if (empty($role) || empty($password) || empty($firstName) || empty($lastName)) {
+            throw new Exception('All required fields must be filled');
+        }
         if ($password !== $confirmPassword) {
             throw new Exception('Passwords do not match');
         }
-
         if (strlen($password) < 8) {
             throw new Exception('Password must be at least 8 characters long');
-        }
-
-        // Determine table and required fields based on role
-        $table = match ($role) {
-            'student' => 'students',
-            'teacher' => 'teachers',
-            'parent' => 'parents',
-            'admin' => 'administrators',
-            default => throw new Exception('Invalid role selected')
-        };
-
-        // Check if email already exists
-        $stmt = $conn->prepare("SELECT id FROM $table WHERE email = ?");
-        $stmt->execute([$email]);
-        if ($stmt->fetch()) {
-            throw new Exception('Email already exists');
         }
 
         // Hash password
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
-        // Insert user based on role
+        // Determine table based on role
         switch ($role) {
+            case 'administrator':
+                $table = 'administrators';
+                
+                // Check if email exists
+                $stmt = $conn->prepare("SELECT id FROM administrators WHERE email = ?");
+                $stmt->bind_param('s', $email);
+                $stmt->execute();
+                if ($stmt->get_result()->num_rows > 0) {
+                    throw new Exception('Email already exists');
+                }
+                
+                // Insert administrator
+                $stmt = $conn->prepare("
+                    INSERT INTO administrators (
+                        first_name, last_name, email, password, phone
+                    ) VALUES (?, ?, ?, ?, ?)
+                ");
+                $stmt->bind_param('sssss', $firstName, $lastName, $email, $hashedPassword, $phone);
+                break;
+
             case 'teacher':
-                if (empty($employeeId) || empty($dateOfBirth) || empty($gender) || empty($department) || 
-                    empty($qualification) || empty($joiningDate) || empty($phone) || empty($address)) {
+                // Additional teacher fields
+                $dateOfBirth = $_POST['date_of_birth'] ?? '';
+                $gender = $_POST['gender'] ?? '';
+                $address = $_POST['address'] ?? '';
+                $subjectSpecialization = $_POST['subject_specialization'] ?? '';
+                $qualification = $_POST['qualification'] ?? '';
+                $experienceYears = filter_input(INPUT_POST, 'experience_years', FILTER_VALIDATE_INT);
+                $joiningDate = $_POST['joining_date'] ?? '';
+                
+                // Validate teacher-specific fields
+                if (empty($dateOfBirth) || empty($gender) || empty($qualification) || 
+                    empty($joiningDate) || empty($subjectSpecialization)) {
                     throw new Exception('All teacher fields are required');
                 }
+                
+                // Check if email exists
+                $stmt = $conn->prepare("SELECT id FROM teachers WHERE email = ?");
+                $stmt->bind_param('s', $email);
+                $stmt->execute();
+                if ($stmt->get_result()->num_rows > 0) {
+                    throw new Exception('Email already exists');
+                }
+                
+                // Insert teacher
                 $stmt = $conn->prepare("
                     INSERT INTO teachers (
-                        email, password, first_name, last_name, employee_id,
-                        date_of_birth, gender, department, qualification,
-                        joining_date, phone, address, status
+                        first_name, last_name, email, password, phone, address,
+                        date_of_birth, gender, subject_specialization, qualification,
+                        experience_years, joining_date, status
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active'
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active'
                     )
                 ");
-                $stmt->execute([
-                    $email, $hashedPassword, $firstName, $lastName, $employeeId,
-                    $dateOfBirth, $gender, $department, $qualification,
-                    $joiningDate, $phone, $address
-                ]);
+                $stmt->bind_param(
+                    'ssssssssssss',
+                    $firstName, $lastName, $email, $hashedPassword, $phone, $address,
+                    $dateOfBirth, $gender, $subjectSpecialization, $qualification,
+                    $experienceYears, $joiningDate
+                );
                 break;
 
             case 'student':
-                if (empty($admissionNumber) || empty($dateOfBirth) || empty($gender) || 
-                    empty($classLevel) || empty($section) || empty($admissionDate) || empty($address)) {
+                // Additional student fields
+                $classId = filter_input(INPUT_POST, 'class_id', FILTER_VALIDATE_INT);
+                $rollNumber = filter_input(INPUT_POST, 'roll_number', FILTER_SANITIZE_STRING);
+                $admissionNumber = filter_input(INPUT_POST, 'admission_number', FILTER_SANITIZE_STRING);
+                $admissionDate = $_POST['admission_date'] ?? '';
+                $gender = $_POST['gender'] ?? '';
+                $dateOfBirth = $_POST['date_of_birth'] ?? '';
+                $address = $_POST['address'] ?? '';
+                $bloodGroup = $_POST['blood_group'] ?? '';
+                
+                // Validate student-specific fields
+                if (empty($classId) || empty($rollNumber) || empty($admissionNumber) || 
+                    empty($admissionDate) || empty($gender) || empty($dateOfBirth)) {
                     throw new Exception('All student fields are required');
                 }
+                
+                // Check if admission number exists
+                $stmt = $conn->prepare("SELECT id FROM students WHERE admission_number = ?");
+                $stmt->bind_param('s', $admissionNumber);
+                $stmt->execute();
+                if ($stmt->get_result()->num_rows > 0) {
+                    throw new Exception('Admission number already exists');
+                }
+                
+                // Insert student
                 $stmt = $conn->prepare("
                     INSERT INTO students (
-                        email, password, admission_number, first_name, last_name,
-                        date_of_birth, gender, class_level, section,
-                        admission_date, address, status
+                        first_name, last_name, email, password, class_id,
+                        roll_number, admission_number, admission_date, gender,
+                        date_of_birth, phone, address, blood_group, status
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active'
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active'
                     )
                 ");
-                $stmt->execute([
-                    $email, $hashedPassword, $admissionNumber, $firstName, $lastName,
-                    $dateOfBirth, $gender, $classLevel, $section,
-                    $admissionDate, $address
-                ]);
+                $stmt->bind_param(
+                    'ssssssssssssss',
+                    $firstName, $lastName, $email, $hashedPassword, $classId,
+                    $rollNumber, $admissionNumber, $admissionDate, $gender,
+                    $dateOfBirth, $phone, $address, $bloodGroup
+                );
                 break;
 
-            case 'parent':
-                if (empty($phone) || empty($address)) {
-                    throw new Exception('All parent fields are required');
-                }
-                $stmt = $conn->prepare("
-                    INSERT INTO parents (
-                        email, password, first_name, last_name,
-                        phone, address, status
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, 'active'
-                    )
-                ");
-                $stmt->execute([
-                    $email, $hashedPassword, $firstName, $lastName,
-                    $phone, $address
-                ]);
-                break;
-
-            case 'admin':
-                if (empty($phone) || empty($employeeId)) {
-                    throw new Exception('All administrator fields are required');
-                }
-                $stmt = $conn->prepare("
-                    INSERT INTO administrators (
-                        email, password, first_name, last_name,
-                        employee_id, phone, status
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, 'active'
-                    )
-                ");
-                $stmt->execute([
-                    $email, $hashedPassword, $firstName, $lastName,
-                    $employeeId, $phone
-                ]);
-                break;
+            default:
+                throw new Exception('Invalid role selected');
         }
-
-        $success = ucfirst($role) . ' account created successfully';
-
-        // Log activity
-        $userId = $conn->lastInsertId();
-        $stmt = $conn->prepare("
-            INSERT INTO notification_logs (
-                student_id, notification_type, notification_method,
-                status, message
-            ) VALUES (?, 'account_created', 'system', 'sent', ?)
-        ");
-        $message = "New $role account created from IP: " . $_SERVER['REMOTE_ADDR'];
-        $stmt->execute([$userId, $message]);
-
-    } catch(Exception $e) {
+        
+        // Execute the prepared statement
+        if (!$stmt->execute()) {
+            throw new Exception("Error creating account: " . $stmt->error);
+        }
+        
+        $success = ucfirst($role) . " account created successfully!";
+        
+    } catch (Exception $e) {
         $error = $e->getMessage();
+    } finally {
+        if (isset($stmt)) {
+            $stmt->close();
+        }
     }
 }
 ?>
@@ -285,21 +285,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         <form method="post" action="" id="registerForm">
                             <div class="role-selector">
-                                <div class="role-option" data-role="student">
-                                    <i class='bx bx-user-circle'></i>
-                                    <div>Student</div>
+                                <div class="role-option" data-role="administrator">
+                                    <i class='bx bx-shield'></i>
+                                    <div>Administrator</div>
                                 </div>
                                 <div class="role-option" data-role="teacher">
                                     <i class='bx bx-chalkboard'></i>
                                     <div>Teacher</div>
                                 </div>
-                                <div class="role-option" data-role="parent">
-                                    <i class='bx bx-group'></i>
-                                    <div>Parent</div>
-                                </div>
-                                <div class="role-option" data-role="admin">
-                                    <i class='bx bx-shield'></i>
-                                    <div>Admin</div>
+                                <div class="role-option" data-role="student">
+                                    <i class='bx bx-user-circle'></i>
+                                    <div>Student</div>
                                 </div>
                             </div>
                             <input type="hidden" name="role" id="selectedRole">
@@ -388,10 +384,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             <div id="teacherFields" class="d-none">
                                 <div class="mb-3">
-                                    <label class="form-label">Employee ID</label>
-                                    <input type="text" name="employee_id" class="form-control">
-                                </div>
-                                <div class="mb-3">
                                     <label class="form-label">Date of Birth</label>
                                     <input type="date" name="date_of_birth" class="form-control">
                                 </div>
@@ -405,12 +397,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     </select>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">Department</label>
-                                    <input type="text" name="department" class="form-control">
+                                    <label class="form-label">Address</label>
+                                    <textarea name="address" class="form-control"></textarea>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Subject Specialization</label>
+                                    <input type="text" name="subject_specialization" class="form-control">
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Qualification</label>
                                     <textarea name="qualification" class="form-control"></textarea>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Experience Years</label>
+                                    <input type="number" name="experience_years" class="form-control">
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Joining Date</label>
@@ -420,8 +420,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             <div id="studentFields" class="d-none">
                                 <div class="mb-3">
+                                    <label class="form-label">Class ID</label>
+                                    <input type="number" name="class_id" class="form-control">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Roll Number</label>
+                                    <input type="text" name="roll_number" class="form-control">
+                                </div>
+                                <div class="mb-3">
                                     <label class="form-label">Admission Number</label>
                                     <input type="text" name="admission_number" class="form-control">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Admission Date</label>
+                                    <input type="date" name="admission_date" class="form-control">
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Date of Birth</label>
@@ -437,28 +449,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     </select>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">Class Level</label>
-                                    <input type="text" name="class_level" class="form-control">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Section</label>
-                                    <input type="text" name="section" class="form-control">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Admission Date</label>
-                                    <input type="date" name="admission_date" class="form-control">
-                                </div>
-                            </div>
-
-                            <div id="commonFields" class="d-none">
-                                <div class="mb-3">
-                                    <label class="form-label">Phone</label>
-                                    <input type="tel" name="phone" class="form-control">
-                                </div>
-                                <div class="mb-3">
                                     <label class="form-label">Address</label>
                                     <textarea name="address" class="form-control"></textarea>
                                 </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Blood Group</label>
+                                    <input type="text" name="blood_group" class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Phone</label>
+                                <input type="tel" name="phone" class="form-control">
                             </div>
 
                             <div class="d-grid">
@@ -474,9 +476,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <h5 class="mb-4">Account Types</h5>
                         
                         <div class="mb-4">
-                            <h6><i class='bx bx-user-circle me-2'></i>Student</h6>
+                            <h6><i class='bx bx-shield me-2'></i>Administrator</h6>
                             <p class="small text-muted">
-                                Access assignments, view grades, track attendance, and manage study materials.
+                                Manage users, oversee system operations, and maintain school records.
                             </p>
                         </div>
 
@@ -488,16 +490,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
 
                         <div class="mb-4">
-                            <h6><i class='bx bx-group me-2'></i>Parent</h6>
+                            <h6><i class='bx bx-user-circle me-2'></i>Student</h6>
                             <p class="small text-muted">
-                                Monitor child's progress, view attendance, and communicate with teachers.
-                            </p>
-                        </div>
-
-                        <div class="mb-4">
-                            <h6><i class='bx bx-shield me-2'></i>Administrator</h6>
-                            <p class="small text-muted">
-                                Manage users, oversee system operations, and maintain school records.
+                                Access assignments, view grades, track attendance, and manage study materials.
                             </p>
                         </div>
 
@@ -526,15 +521,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (role === 'teacher') {
                     $('#teacherFields').removeClass('d-none');
                     $('#studentFields').addClass('d-none');
-                    $('#commonFields').addClass('d-none');
                 } else if (role === 'student') {
                     $('#teacherFields').addClass('d-none');
                     $('#studentFields').removeClass('d-none');
-                    $('#commonFields').addClass('d-none');
                 } else {
                     $('#teacherFields').addClass('d-none');
                     $('#studentFields').addClass('d-none');
-                    $('#commonFields').removeClass('d-none');
                 }
             });
 
