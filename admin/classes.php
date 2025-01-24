@@ -1,8 +1,8 @@
 <?php
 session_start();
 require_once '../config/database.php';
-require_once '../includes/functions.php';
-requireAdmin();
+// require_once '../includes/functions.php';
+// requireAdmin();
 
 // Enable error reporting for debugging
 error_reporting(E_ALL);
@@ -17,12 +17,26 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'administrator') {
 try {
     // Get admin info
     $admin_id = $_SESSION['user_id'];
+
     
     // Check if administrators table exists
     $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
     if ($table_check->num_rows === 0) {
         throw new Exception('Database table "administrators" not found');
     }
+
+    $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+    if (!$stmt) {
+        throw new Exception("Failed to prepare admin query: " . $conn->error);
+    }
+    
+    $stmt->bind_param('i', $admin_id);
+    if (!$stmt->execute()) {
+        throw new Exception("Failed to execute admin query: " . $stmt->error);
+    }
+    
+    $result = $stmt->get_result();
+    $admin = $result->fetch_assoc();
     
     // Pagination settings
     $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
@@ -67,7 +81,8 @@ try {
         SELECT 
             c.*,
             (SELECT COUNT(*) FROM students s WHERE s.class_id = c.id AND s.status = 'Active') as student_count,
-            (SELECT COUNT(*) FROM class_subjects cs WHERE cs.class_id = c.id) as subject_count
+            (SELECT COUNT(*) FROM subjects cs WHERE cs.id = c.id) as subject_count,
+            (SELECT CONCAT(t.first_name, ' ', t.last_name) FROM teachers t WHERE t.id = c.teacher_id) as teacher_name
         FROM classes c
         WHERE 1=1" . $searchCondition . "
         ORDER BY c.grade_level ASC, c.name ASC 
@@ -159,6 +174,7 @@ try {
         .stat-card h3 {
             margin: 0 0 10px 0;
             color: #333;
+            font-size: 18px;
         }
         .stat-value {
             font-size: 24px;
@@ -211,6 +227,23 @@ try {
         }
         .count-item i {
             font-size: 1.1em;
+        }
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .table {
+            font-size: 0.95rem;
+        }
+
+        .btn {
+            font-size: 0.875rem;
+        }
+
+        .badge {
+            font-size: 0.875rem;
         }
     </style>
 </head>
@@ -317,134 +350,346 @@ try {
                     </div>
                 </div>
 
-                <!-- Search and Filters -->
-                <div class="content-header">
-                    <div class="filters">
-                        <div class="search-box">
-                            <form method="GET" action="">
-                                <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search classes...">
-                                <select name="grade" class="filter-select">
-                                    <option value="">All Grades</option>
-                                    <?php foreach ($grades as $grade): ?>
-                                        <option value="<?php echo $grade; ?>" <?php echo $grade_filter == $grade ? 'selected' : ''; ?>>
-                                            Grade <?php echo htmlspecialchars($grade); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <button type="submit"><i class='bx bx-search'></i></button>
-                            </form>
+                <!-- Page Content -->
+                <div class="page-content">
+                    <div class="container-fluid">
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <h5 class="card-title mb-0">Class Management</h5>
+                                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addClassModal">
+                                            <i class='bx bx-plus'></i> Add New Class
+                                        </button>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="table-responsive">
+                                            <table class="table table-striped" id="classesTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Class Name</th>
+                                                        <th>Grade Level</th>
+                                                        <th>Section</th>
+                                                        <th>Class Teacher</th>
+                                                        <th>Students</th>
+                                                        <th>Subjects</th>
+                                                        <th>Status</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($classes as $class): ?>
+                                                    <tr>
+                                                        <td><?php echo htmlspecialchars($class['name']); ?></td>
+                                                        <td><?php echo htmlspecialchars($class['grade_level']); ?></td>
+                                                        <td><?php echo htmlspecialchars($class['section']); ?></td>
+                                                        <td><?php echo htmlspecialchars($class['teacher_name']); ?></td>
+                                                        <td><?php echo htmlspecialchars($class['student_count']); ?> students</td>
+                                                        <td><?php echo htmlspecialchars($class['subject_count']); ?> subjects</td>
+                                                        <td>
+                                                            <span class="badge <?php echo $class['status'] === 'active' ? 'bg-success' : 'bg-danger'; ?>">
+                                                                <?php echo ucfirst(htmlspecialchars($class['status'])); ?>
+                                                            </span>
+                                                        </td>
+                                                        <td>
+                                                            <button class="btn btn-sm btn-primary" onclick="editClass(<?php echo $class['id']; ?>)">
+                                                                <i class='bx bx-edit'></i>
+                                                            </button>
+                                                            <button class="btn btn-sm btn-danger" onclick="deleteClass(<?php echo $class['id']; ?>)">
+                                                                <i class='bx bx-trash'></i>
+                                                            </button>
+                                                            <button class="btn btn-sm btn-info" onclick="viewClass(<?php echo $class['id']; ?>)">
+                                                                <i class='bx bx-show'></i>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <button class="add-button" onclick="location.href='add_class.php'">
-                        <i class='bx bx-plus'></i> Add Class
-                    </button>
-                </div>
-
-                <!-- Classes Table -->
-                <div class="table-container">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Class Info</th>
-                                <th>Grade</th>
-                                <th>Students</th>
-                                <th>Subjects</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($classes as $class): ?>
-                                <tr>
-                                    <td>
-                                        <div class="class-info">
-                                            <span class="class-name"><?php echo htmlspecialchars($class['name']); ?></span>
-                                            <span class="class-section"><?php echo htmlspecialchars($class['section']); ?></span>
-                                        </div>
-                                    </td>
-                                    <td>Grade <?php echo htmlspecialchars($class['grade_level']); ?></td>
-                                    <td>
-                                        <div class="counts">
-                                            <span class="count-item">
-                                                <i class='bx bxs-graduation'></i>
-                                                <?php echo number_format($class['student_count']); ?>
-                                            </span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="counts">
-                                            <span class="count-item">
-                                                <i class='bx bxs-book'></i>
-                                                <?php echo number_format($class['subject_count']); ?>
-                                            </span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="status-badge <?php echo strtolower($class['status']); ?>">
-                                            <?php echo htmlspecialchars($class['status']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="actions">
-                                        <a href="edit_class.php?id=<?php echo $class['id']; ?>" class="edit-btn">
-                                            <i class='bx bx-edit'></i>
-                                        </a>
-                                        <button class="delete-btn" onclick="deleteClass(<?php echo $class['id']; ?>)">
-                                            <i class='bx bx-trash'></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-
-                    <!-- Pagination -->
-                    <?php if ($totalPages > 1): ?>
-                        <div class="pagination">
-                            <?php if ($page > 1): ?>
-                                <a href="?page=<?php echo ($page - 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($grade_filter) ? '&grade=' . urlencode($grade_filter) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-left'></i>
-                                </a>
-                            <?php endif; ?>
-
-                            <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-                                <a href="?page=<?php echo $i; ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($grade_filter) ? '&grade=' . urlencode($grade_filter) : ''; ?>" 
-                                   class="page-link <?php echo $i === $page ? 'active' : ''; ?>">
-                                    <?php echo $i; ?>
-                                </a>
-                            <?php endfor; ?>
-
-                            <?php if ($page < $totalPages): ?>
-                                <a href="?page=<?php echo ($page + 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($grade_filter) ? '&grade=' . urlencode($grade_filter) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-right'></i>
-                                </a>
-                            <?php endif; ?>
-                        </div>
-                    <?php endif; ?>
                 </div>
             <?php endif; ?>
         </main>
     </div>
 
+    <!-- Add Class Modal -->
+    <div class="modal fade" id="addClassModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add New Class</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addClassForm">
+                        <div class="mb-3">
+                            <label class="form-label">Class Name</label>
+                            <input type="text" class="form-control" name="name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Grade Level</label>
+                            <select class="form-select" name="grade_level" required>
+                                <option value="">Select Grade Level</option>
+                                <?php for($i = 1; $i <= 12; $i++): ?>
+                                    <option value="<?php echo $i; ?>">Grade <?php echo $i; ?></option>
+                                <?php endfor; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Section</label>
+                            <input type="text" class="form-control" name="section" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Class Teacher</label>
+                            <select class="form-select" name="teacher_id" required>
+                                <option value="">Select Teacher</option>
+                                <?php
+                                $teachers_query = "SELECT id, first_name, last_name FROM teachers WHERE status = 'active'";
+                                $teachers_result = $conn->query($teachers_query);
+                                while($teacher = $teachers_result->fetch_assoc()):
+                                ?>
+                                    <option value="<?php echo $teacher['id']; ?>">
+                                        <?php echo htmlspecialchars($teacher['first_name'] . ' ' . $teacher['last_name']); ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status" required>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="saveClass()">Save Class</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Class Modal -->
+    <div class="modal fade" id="editClassModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Class</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editClassForm">
+                        <input type="hidden" name="class_id" id="edit_class_id">
+                        <div class="mb-3">
+                            <label class="form-label">Class Name</label>
+                            <input type="text" class="form-control" name="name" id="edit_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Grade Level</label>
+                            <select class="form-select" name="grade_level" id="edit_grade_level" required>
+                                <option value="">Select Grade Level</option>
+                                <?php for($i = 1; $i <= 12; $i++): ?>
+                                    <option value="<?php echo $i; ?>">Grade <?php echo $i; ?></option>
+                                <?php endfor; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Section</label>
+                            <input type="text" class="form-control" name="section" id="edit_section" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Class Teacher</label>
+                            <select class="form-select" name="teacher_id" id="edit_teacher_id" required>
+                                <option value="">Select Teacher</option>
+                                <?php
+                                $teachers_result->data_seek(0);
+                                while($teacher = $teachers_result->fetch_assoc()):
+                                ?>
+                                    <option value="<?php echo $teacher['id']; ?>">
+                                        <?php echo htmlspecialchars($teacher['first_name'] . ' ' . $teacher['last_name']); ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status" id="edit_status" required>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="updateClass()">Update Class</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Class Modal -->
+    <div class="modal fade" id="viewClassModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Class Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="mb-3">Basic Information</h6>
+                            <p><strong>Class Name:</strong> <span id="view_name"></span></p>
+                            <p><strong>Grade Level:</strong> <span id="view_grade_level"></span></p>
+                            <p><strong>Section:</strong> <span id="view_section"></span></p>
+                            <p><strong>Class Teacher:</strong> <span id="view_teacher"></span></p>
+                            <p><strong>Status:</strong> <span id="view_status"></span></p>
+                        </div>
+                        <div class="col-md-6">
+                            <h6 class="mb-3">Statistics</h6>
+                            <p><strong>Total Students:</strong> <span id="view_students"></span></p>
+                            <p><strong>Total Subjects:</strong> <span id="view_subjects"></span></p>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <h6 class="mb-3">Students List</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm" id="studentsListTable">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Student ID</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="view_students_list">
+                                    <!-- Students list will be loaded dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Function to handle class deletion
         function deleteClass(id) {
             if (confirm('Are you sure you want to delete this class? This will affect all students in this class.')) {
-                fetch(`api/classes/delete.php?id=${id}`, {
-                    method: 'DELETE'
+                // Add your delete logic here
+                fetch('api/delete_class.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ id: id })
                 })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         location.reload();
                     } else {
-                        alert(data.message || 'Error deleting class');
+                        alert('Failed to delete class: ' + data.message);
                     }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('An error occurred while deleting the class');
                 });
             }
         }
+
+        // Function to open edit modal
+        function editClass(id) {
+            fetch('api/get_class.php?id=' + id)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('edit_class_id').value = data.id;
+                    document.getElementById('edit_name').value = data.name;
+                    document.getElementById('edit_grade_level').value = data.grade_level;
+                    document.getElementById('edit_section').value = data.section;
+                    document.getElementById('edit_teacher_id').value = data.teacher_id;
+                    document.getElementById('edit_status').value = data.status;
+                    
+                    new bootstrap.Modal(document.getElementById('editClassModal')).show();
+                });
+        }
+
+        // Function to view class details
+        function viewClass(id) {
+            fetch('api/get_class_details.php?id=' + id)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('view_name').textContent = data.name;
+                    document.getElementById('view_grade_level').textContent = 'Grade ' + data.grade_level;
+                    document.getElementById('view_section').textContent = data.section;
+                    document.getElementById('view_teacher').textContent = data.teacher_name;
+                    document.getElementById('view_status').textContent = data.status;
+                    document.getElementById('view_students').textContent = data.student_count;
+                    document.getElementById('view_subjects').textContent = data.subject_count;
+                    
+                    // Populate students list
+                    const studentsList = document.getElementById('view_students_list');
+                    studentsList.innerHTML = '';
+                    data.students.forEach(student => {
+                        studentsList.innerHTML += `
+                            <tr>
+                                <td>${student.name}</td>
+                                <td>${student.student_id}</td>
+                                <td><span class="badge ${student.status === 'active' ? 'bg-success' : 'bg-danger'}">${student.status}</span></td>
+                            </tr>
+                        `;
+                    });
+                    
+                    new bootstrap.Modal(document.getElementById('viewClassModal')).show();
+                });
+        }
+
+        // Function to save new class
+        function saveClass() {
+            const formData = new FormData(document.getElementById('addClassForm'));
+            fetch('api/add_class.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Failed to add class: ' + data.message);
+                }
+            });
+        }
+
+        // Function to update class
+        function updateClass() {
+            const formData = new FormData(document.getElementById('editClassForm'));
+            fetch('api/update_class.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Failed to update class: ' + data.message);
+                }
+            });
+        }
+
+        $(document).ready(function() {
+            $('#classesTable').DataTable();
+        });
     </script>
 
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>

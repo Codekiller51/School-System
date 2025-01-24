@@ -1,12 +1,8 @@
+
 <?php
 session_start();
-require_once('../config/database.php');
+require_once '../config/database.php';
 
-// Enable error reporting for debugging
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Check if user is logged in and is an administrator
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'administrator') {
     header('Location: ../auth/login.php');
     exit();
@@ -15,119 +11,27 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'administrator') {
 try {
     // Get admin info
     $admin_id = $_SESSION['user_id'];
-
-    
-    // Check if administrators table exists
-    $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
-    if ($table_check->num_rows === 0) {
-        throw new Exception('Database table "administrators" not found');
-    }
-
     $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
-    if (!$stmt) {
-        throw new Exception("Failed to prepare admin query: " . $conn->error);
-    }
-    
     $stmt->bind_param('i', $admin_id);
-    if (!$stmt->execute()) {
-        throw new Exception("Failed to execute admin query: " . $stmt->error);
-    }
-    
+    $stmt->execute();
     $result = $stmt->get_result();
     $admin = $result->fetch_assoc();
     
-    // Pagination settings
+    // Get teachers with pagination
     $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
     $limit = 10;
     $offset = ($page - 1) * $limit;
     
-    // Search functionality
-    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $searchCondition = '';
-    $params = [];
-    $types = '';
-    
-    if (!empty($search)) {
-        $searchCondition = " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR phone LIKE ?)";
-        $searchParam = "%$search%";
-        $params = [$searchParam, $searchParam, $searchParam, $searchParam];
-        $types = 'ssss';
-    }
-    
-    // Get total number of teachers
-    $countQuery = "SELECT COUNT(*) as total FROM teachers WHERE 1=1" . $searchCondition;
-    $stmt = $conn->prepare($countQuery);
-    if (!empty($params)) {
-        $stmt->bind_param($types, ...$params);
-    }
-    $stmt->execute();
-    $totalTeachers = $stmt->get_result()->fetch_assoc()['total'];
-    $totalPages = ceil($totalTeachers / $limit);
-    
-    // Get teachers with pagination
-    $query = "
-        SELECT 
-            id,
-            first_name,
-            last_name,
-            email,
-            phone,
-            subject_specialization,
-            qualification,
-            experience_years,
-            status,
-            created_at
-        FROM teachers 
-        WHERE 1=1" . $searchCondition . "
-        ORDER BY created_at DESC 
-        LIMIT ? OFFSET ?
-    ";
-    
+    $query = "SELECT * FROM teachers ORDER BY first_name, last_name LIMIT ? OFFSET ?";
     $stmt = $conn->prepare($query);
-    if (!empty($params)) {
-        $stmt->bind_param($types . 'ii', ...[...$params, $limit, $offset]);
-    } else {
-        $stmt->bind_param('ii', $limit, $offset);
-    }
-    
+    $stmt->bind_param('ii', $limit, $offset);
     $stmt->execute();
-    $result = $stmt->get_result();
-    $teachers = [];
-    while ($row = $result->fetch_assoc()) {
-        $teachers[] = $row;
-    }
+    $teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     
-    // Get teacher statistics
-    $statsQuery = "
-        SELECT 
-            status,
-            COUNT(*) as count,
-            subject_specialization
-        FROM teachers 
-        GROUP BY status, subject_specialization
-    ";
-    $statsResult = $conn->query($statsQuery);
-    $statistics = [
-        'total' => $totalTeachers,
-        'active' => 0,
-        'inactive' => 0,
-        'departments' => []
-    ];
-    
-    while ($row = $statsResult->fetch_assoc()) {
-        if ($row['status'] === 'Active') {
-            $statistics['active']++;
-        } else {
-            $statistics['inactive']++;
-        }
-        
-        if (!empty($row['subject_specialization'])) {
-            if (!isset($statistics['departments'][$row['subject_specialization']])) {
-                $statistics['departments'][$row['subject_specialization']] = 0;
-            }
-            $statistics['departments'][$row['subject_specialization']] += $row['count'];
-        }
-    }
+    // Get total teachers count
+    $countQuery = "SELECT COUNT(*) as total FROM teachers";
+    $totalTeachers = $conn->query($countQuery)->fetch_assoc()['total'];
+    $totalPages = ceil($totalTeachers / $limit);
     
 } catch (Exception $e) {
     error_log("Error in Teachers Page: " . $e->getMessage());
@@ -139,107 +43,62 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Teachers Management - School System</title>
+    <title>Teacher Management - School Management System</title>
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="css/dashboard.css">
-    <style>
-        .teacher-stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .stat-card {
-            background: #fff;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .stat-card h3 {
-            margin: 0 0 10px 0;
-            color: #333;
-        }
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: var(--primary-color);
-        }
-        .department-list {
-            margin-top: 15px;
-        }
-        .department-item {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            padding: 5px 0;
-            border-bottom: 1px solid #eee;
-        }
-    </style>
 </head>
 <body>
     <div class="wrapper">
         <!-- Sidebar -->
         <aside class="sidebar">
-            <div class="sidebar-header">
-                <img src="../assets/images/logo.png" alt="Logo" class="logo">
-                <h2>School System</h2>
+            <div class="logo">
+                <i class='bx bxs-school'></i>
+                <span>School System</span>
             </div>
             
-            <nav class="sidebar-nav">
-                <ul>
-                    <li>
-                        <a href="index.php">
-                            <i class='bx bxs-dashboard'></i>
-                            <span>Dashboard</span>
-                        </a>
-                    </li>
-                    <li class="active">
-                        <a href="teachers.php">
-                            <i class='bx bxs-user'></i>
-                            <span>Teachers</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="students.php">
-                            <i class='bx bxs-graduation'></i>
-                            <span>Students</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="classes.php">
-                            <i class='bx bxs-school'></i>
-                            <span>Classes</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="subjects.php">
-                            <i class='bx bxs-book'></i>
-                            <span>Subjects</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="exams.php">
-                            <i class='bx bxs-notepad'></i>
-                            <span>Exams</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="timetable.php">
-                            <i class='bx bxs-calendar'></i>
-                            <span>Timetable</span>
-                        </a>
-                    </li>
-                    <li>
-                        <a href="settings.php">
-                            <i class='bx bxs-cog'></i>
-                            <span>Settings</span>
-                        </a>
-                    </li>
-                </ul>
+            <nav class="nav-links">
+                <a href="index.php" class="nav-link">
+                    <i class='bx bxs-dashboard'></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="teachers.php" class="nav-link active">
+                    <i class='bx bxs-user'></i>
+                    <span>Teachers</span>
+                </a>
+                <a href="students.php" class="nav-link">
+                    <i class='bx bxs-graduation'></i>
+                    <span>Students</span>
+                </a>
+                <a href="classes.php" class="nav-link">
+                    <i class='bx bxs-school'></i>
+                    <span>Classes</span>
+                </a>
+                <a href="subjects.php" class="nav-link">
+                    <i class='bx bxs-book'></i>
+                    <span>Subjects</span>
+                </a>
+                <a href="timetable.php" class="nav-link">
+                    <i class='bx bxs-calendar'></i>
+                    <span>Timetable</span>
+                </a>
+                <a href="exams.php" class="nav-link">
+                    <i class='bx bxs-notepad'></i>
+                    <span>Exams</span>
+                </a>
+                <a href="settings.php" class="nav-link">
+                    <i class='bx bxs-cog'></i>
+                    <span>Settings</span>
+                </a>
+                <a href="../auth/logout.php" class="nav-link">
+                    <i class='bx bxs-log-out'></i>
+                    <span>Logout</span>
+                </a>
             </nav>
         </aside>
 
+        <!-- Main Content -->
         <main class="main-content">
             <!-- Header -->
             <header class="header">
@@ -247,154 +106,345 @@ try {
                     <i class='bx bx-menu'></i>
                 </button>
                 
-                <div class="header-right">
-                    <div class="user-info">
-                        <span><?php echo htmlspecialchars($_SESSION['first_name'] . ' ' . $_SESSION['last_name']); ?></span>
-                        <small>Administrator</small>
-                    </div>
-                    <div class="user-avatar">
-                        <img src="../assets/images/default-avatar.png" alt="User Avatar">
-                    </div>
-                    <div class="logout">
-                        <a href="../auth/logout.php" class="btn-logout">
-                            <i class='bx bx-log-out'></i>
-                        </a>
-                    </div>
+                <div class="search-box">
+                    <i class='bx bx-search'></i>
+                    <input type="text" placeholder="Search...">
+                </div>
+                
+                <div class="user-profile">
+                    <img src="https://ui-avatars.com/api/?name=<?php echo urlencode($admin['first_name'] . ' ' . $admin['last_name']); ?>&background=4361ee&color=fff" alt="Profile">
+                    <span><?php echo htmlspecialchars($admin['first_name'] . ' ' . $admin['last_name']); ?></span>
                 </div>
             </header>
 
-            <?php if (isset($error)): ?>
-                <div class="alert alert-danger" style="margin: 20px; padding: 15px; border-radius: 5px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24;">
-                    <i class='bx bx-error-circle'></i>
-                    <?php echo htmlspecialchars($error); ?>
-                </div>
-            <?php else: ?>
-                <!-- Teacher Statistics -->
-                <div class="teacher-stats">
-                    <div class="stat-card">
-                        <h3>Total Teachers</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['total']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Active Teachers</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['active']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Inactive Teachers</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['inactive']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Departments</h3>
-                        <div class="department-list">
-                            <?php foreach ($statistics['departments'] as $dept => $count): ?>
-                                <div class="department-item">
-                                    <span><?php echo htmlspecialchars($dept); ?></span>
-                                    <span><?php echo number_format($count); ?></span>
+            <!-- Page Content -->
+            <div class="page-content">
+                <div class="container-fluid">
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="card-title mb-0">Teacher Management</h5>
+                                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
+                                        <i class='bx bx-plus'></i> Add New Teacher
+                                    </button>
                                 </div>
-                            <?php endforeach; ?>
+                                <div class="card-body">
+                                    <div class="table-responsive">
+                                        <table class="table table-striped">
+                                            <thead>
+                                                <tr>
+                                                    <th>Name</th>
+                                                    <th>Email</th>
+                                                    <th>Phone</th>
+                                                    <th>Specialization</th>
+                                                    <th>Status</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($teachers as $teacher): ?>
+                                                <tr>
+                                                    <td><?php echo htmlspecialchars($teacher['first_name'] . ' ' . $teacher['last_name']); ?></td>
+                                                    <td><?php echo htmlspecialchars($teacher['email']); ?></td>
+                                                    <td><?php echo htmlspecialchars($teacher['phone']); ?></td>
+                                                    <td><?php echo htmlspecialchars($teacher['subject_specialization']); ?></td>
+                                                    <td>
+                                                        <span class="badge <?php echo $teacher['status'] === 'Active' ? 'bg-success' : 'bg-danger'; ?>">
+                                                            <?php echo htmlspecialchars($teacher['status']); ?>
+                                                        </span>
+                                                    </td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-info" onclick="viewTeacher(<?php echo $teacher['id']; ?>)">
+                                                            <i class='bx bx-show'></i>
+                                                        </button>
+                                                        <button class="btn btn-sm btn-primary" onclick="editTeacher(<?php echo $teacher['id']; ?>)">
+                                                            <i class='bx bx-edit'></i>
+                                                        </button>
+                                                        <button class="btn btn-sm btn-danger" onclick="deleteTeacher(<?php echo $teacher['id']; ?>)">
+                                                            <i class='bx bx-trash'></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <!-- Pagination -->
+                                    <?php if ($totalPages > 1): ?>
+                                    <nav aria-label="Page navigation" class="mt-4">
+                                        <ul class="pagination justify-content-center">
+                                            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                                            <li class="page-item <?php echo $page === $i ? 'active' : ''; ?>">
+                                                <a class="page-link" href="?page=<?php echo $i; ?>"><?php echo $i; ?></a>
+                                            </li>
+                                            <?php endfor; ?>
+                                        </ul>
+                                    </nav>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-
-                <!-- Search and Add Teacher Button -->
-                <div class="content-header">
-                    <div class="search-box">
-                        <form method="GET" action="">
-                            <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search teachers...">
-                            <button type="submit"><i class='bx bx-search'></i></button>
-                        </form>
-                    </div>
-                    <button class="add-button" onclick="location.href='add_teacher.php'">
-                        <i class='bx bx-plus'></i> Add Teacher
-                    </button>
-                </div>
-
-                <!-- Teachers Table -->
-                <div class="table-container">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Email</th>
-                                <th>Phone</th>
-                                <th>Specialization</th>
-                                <th>Experience</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($teachers as $teacher): ?>
-                                <tr>
-                                    <td><?php echo htmlspecialchars($teacher['first_name'] . ' ' . $teacher['last_name']); ?></td>
-                                    <td><?php echo htmlspecialchars($teacher['email']); ?></td>
-                                    <td><?php echo htmlspecialchars($teacher['phone']); ?></td>
-                                    <td><?php echo htmlspecialchars($teacher['subject_specialization']); ?></td>
-                                    <td><?php echo htmlspecialchars($teacher['experience_years']); ?> years</td>
-                                    <td>
-                                        <span class="status-badge <?php echo strtolower($teacher['status']); ?>">
-                                            <?php echo htmlspecialchars($teacher['status']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="actions">
-                                        <a href="edit_teacher.php?id=<?php echo $teacher['id']; ?>" class="edit-btn">
-                                            <i class='bx bx-edit'></i>
-                                        </a>
-                                        <button class="delete-btn" onclick="deleteTeacher(<?php echo $teacher['id']; ?>)">
-                                            <i class='bx bx-trash'></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-
-                    <!-- Pagination -->
-                    <?php if ($totalPages > 1): ?>
-                        <div class="pagination">
-                            <?php if ($page > 1): ?>
-                                <a href="?page=<?php echo ($page - 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-left'></i>
-                                </a>
-                            <?php endif; ?>
-
-                            <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-                                <a href="?page=<?php echo $i; ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?>" 
-                                   class="page-link <?php echo $i === $page ? 'active' : ''; ?>">
-                                    <?php echo $i; ?>
-                                </a>
-                            <?php endfor; ?>
-
-                            <?php if ($page < $totalPages): ?>
-                                <a href="?page=<?php echo ($page + 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-right'></i>
-                                </a>
-                            <?php endif; ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            <?php endif; ?>
+            </div>
         </main>
     </div>
 
+    <!-- Add Teacher Modal -->
+    <div class="modal fade" id="addTeacherModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add New Teacher</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addTeacherForm">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">First Name</label>
+                                <input type="text" class="form-control" name="first_name" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" class="form-control" name="last_name" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" name="email" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" name="password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Phone</label>
+                            <input type="tel" class="form-control" name="phone">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Address</label>
+                            <textarea class="form-control" name="address" rows="2"></textarea>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Date of Birth</label>
+                                <input type="date" class="form-control" name="date_of_birth">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Gender</label>
+                                <select class="form-select" name="gender">
+                                    <option value="">Select Gender</option>
+                                    <option value="Male">Male</option>
+                                    <option value="Female">Female</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Subject Specialization</label>
+                            <input type="text" class="form-control" name="subject_specialization">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Qualification</label>
+                            <input type="text" class="form-control" name="qualification">
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Experience (Years)</label>
+                                <input type="number" class="form-control" name="experience_years" min="0">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Joining Date</label>
+                                <input type="date" class="form-control" name="joining_date">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status">
+                                <option value="Active">Active</option>
+                                <option value="Inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="saveTeacher()">Save Teacher</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Teacher Modal -->
+    <div class="modal fade" id="editTeacherModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Teacher</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editTeacherForm">
+                        <input type="hidden" name="teacher_id">
+                        <!-- Same form fields as Add Teacher Modal -->
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="updateTeacher()">Update Teacher</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Teacher Modal -->
+    <div class="modal fade" id="viewTeacherModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Teacher Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-4 text-center mb-3">
+                            <img src="" alt="Teacher Profile" class="img-fluid rounded-circle mb-2" id="teacherProfileImage">
+                            <h4 id="teacherName"></h4>
+                            <p class="text-muted" id="teacherSpecialization"></p>
+                        </div>
+                        <div class="col-md-8">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>Email:</strong> <span id="teacherEmail"></span></p>
+                                    <p><strong>Phone:</strong> <span id="teacherPhone"></span></p>
+                                    <p><strong>Gender:</strong> <span id="teacherGender"></span></p>
+                                    <p><strong>Date of Birth:</strong> <span id="teacherDOB"></span></p>
+                                </div>
+                                <div class="col-md-6">
+                                    <p><strong>Qualification:</strong> <span id="teacherQualification"></span></p>
+                                    <p><strong>Experience:</strong> <span id="teacherExperience"></span></p>
+                                    <p><strong>Joining Date:</strong> <span id="teacherJoiningDate"></span></p>
+                                    <p><strong>Status:</strong> <span id="teacherStatus"></span></p>
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <p><strong>Address:</strong></p>
+                                <p id="teacherAddress"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Toggle sidebar
+        document.querySelector('.toggle-sidebar').addEventListener('click', function() {
+            document.querySelector('.sidebar').classList.toggle('collapsed');
+            document.querySelector('.main-content').classList.toggle('expanded');
+        });
+
+        // Teacher CRUD operations
+        function viewTeacher(id) {
+            fetch(`api/get_teacher.php?id=${id}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('teacherName').textContent = data.first_name + ' ' + data.last_name;
+                    document.getElementById('teacherEmail').textContent = data.email;
+                    document.getElementById('teacherPhone').textContent = data.phone || 'N/A';
+                    document.getElementById('teacherSpecialization').textContent = data.subject_specialization || 'N/A';
+                    document.getElementById('teacherGender').textContent = data.gender || 'N/A';
+                    document.getElementById('teacherDOB').textContent = data.date_of_birth || 'N/A';
+                    document.getElementById('teacherQualification').textContent = data.qualification || 'N/A';
+                    document.getElementById('teacherExperience').textContent = data.experience_years ? data.experience_years + ' years' : 'N/A';
+                    document.getElementById('teacherJoiningDate').textContent = data.joining_date || 'N/A';
+                    document.getElementById('teacherStatus').textContent = data.status;
+                    document.getElementById('teacherAddress').textContent = data.address || 'N/A';
+                    
+                    const profileImage = data.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(data.first_name + ' ' + data.last_name)}&background=4361ee&color=fff`;
+                    document.getElementById('teacherProfileImage').src = profileImage;
+                    
+                    new bootstrap.Modal(document.getElementById('viewTeacherModal')).show();
+                })
+                .catch(error => alert('Error loading teacher details'));
+        }
+
+        function editTeacher(id) {
+            fetch(`api/get_teacher.php?id=${id}`)
+                .then(response => response.json())
+                .then(data => {
+                    const form = document.getElementById('editTeacherForm');
+                    form.teacher_id.value = data.id;
+                    // Populate other form fields...
+                    new bootstrap.Modal(document.getElementById('editTeacherModal')).show();
+                })
+                .catch(error => alert('Error loading teacher details'));
+        }
+
+        function saveTeacher() {
+            const form = document.getElementById('addTeacherForm');
+            const formData = new FormData(form);
+            
+            fetch('api/add_teacher.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Teacher added successfully');
+                    location.reload();
+                } else {
+                    alert(data.message || 'Error adding teacher');
+                }
+            })
+            .catch(error => alert('Error adding teacher'));
+        }
+
+        function updateTeacher() {
+            const form = document.getElementById('editTeacherForm');
+            const formData = new FormData(form);
+            
+            fetch('api/update_teacher.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Teacher updated successfully');
+                    location.reload();
+                } else {
+                    alert(data.message || 'Error updating teacher');
+                }
+            })
+            .catch(error => alert('Error updating teacher'));
+        }
+
         function deleteTeacher(id) {
             if (confirm('Are you sure you want to delete this teacher?')) {
-                fetch(`api/teachers/delete.php?id=${id}`, {
-                    method: 'DELETE'
+                fetch('api/delete_teacher.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ id: id })
                 })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
+                        alert('Teacher deleted successfully');
                         location.reload();
                     } else {
                         alert(data.message || 'Error deleting teacher');
                     }
                 })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('An error occurred while deleting the teacher');
-                });
+                .catch(error => alert('Error deleting teacher'));
             }
         }
     </script>

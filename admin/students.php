@@ -2,61 +2,55 @@
 session_start();
 require_once('../config/database.php');
 
-// Enable error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Check if user is logged in and is an administrator
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'administrator') {
     header('Location: ../auth/login.php');
     exit();
 }
 
 try {
-    // Get admin info
     $admin_id = $_SESSION['user_id'];
+
     
-    // Check if administrators table exists
     $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
     if ($table_check->num_rows === 0) {
         throw new Exception('Database table "administrators" not found');
     }
+
+    $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+    if (!$stmt) {
+        throw new Exception("Failed to prepare admin query: " . $conn->error);
+    }
     
-    // Pagination settings
+    $stmt->bind_param('i', $admin_id);
+    if (!$stmt->execute()) {
+        throw new Exception("Failed to execute admin query: " . $stmt->error);
+    }
+    
+    $result = $stmt->get_result();
+    $admin = $result->fetch_assoc();
+    
     $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
     $limit = 10;
     $offset = ($page - 1) * $limit;
     
-    // Search functionality
+    // Search 
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $class_filter = isset($_GET['class']) ? trim($_GET['class']) : '';
     $searchCondition = '';
     $params = [];
     $types = '';
     
-    if (!empty($search) || !empty($class_filter)) {
-        $conditions = [];
-        if (!empty($search)) {
-            $conditions[] = "(s.first_name LIKE ? OR s.last_name LIKE ? OR s.email LIKE ? OR s.registration_number LIKE ?)";
-            $searchParam = "%$search%";
-            $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam]);
-            $types .= 'ssss';
-        }
-        if (!empty($class_filter)) {
-            $conditions[] = "s.class_id = ?";
-            $params[] = $class_filter;
-            $types .= 'i';
-        }
-        $searchCondition = " AND " . implode(" AND ", $conditions);
+    if (!empty($search)) {
+        $searchCondition = " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR admission_number LIKE ?)";
+        $searchParam = "%$search%";
+        $params = [$searchParam, $searchParam, $searchParam, $searchParam];
+        $types = 'ssss';
     }
     
-    // Get total number of students
-    $countQuery = "
-        SELECT COUNT(*) as total 
-        FROM students s
-        LEFT JOIN classes c ON s.class_id = c.id
-        WHERE 1=1" . $searchCondition;
-    
+    // Get total  of students
+    $countQuery = "SELECT COUNT(*) as total FROM students WHERE 1=1" . $searchCondition;
     $stmt = $conn->prepare($countQuery);
     if (!empty($params)) {
         $stmt->bind_param($types, ...$params);
@@ -68,13 +62,19 @@ try {
     // Get students with pagination
     $query = "
         SELECT 
-            s.*,
-            c.name as class_name,
-            c.grade_level
-        FROM students s
-        LEFT JOIN classes c ON s.class_id = c.id
+            id,
+            first_name,
+            last_name,
+            email,
+            phone,
+            admission_number,
+            class_id,
+            gender,
+            status,
+            created_at
+        FROM students 
         WHERE 1=1" . $searchCondition . "
-        ORDER BY s.created_at DESC 
+        ORDER BY created_at DESC 
         LIMIT ? OFFSET ?
     ";
     
@@ -96,41 +96,23 @@ try {
     $statsQuery = "
         SELECT 
             status,
-            COUNT(*) as count,
-            c.grade_level
-        FROM students s
-        LEFT JOIN classes c ON s.class_id = c.id
-        GROUP BY status, c.grade_level
+            COUNT(*) as count
+        FROM students 
+        GROUP BY status
     ";
     $statsResult = $conn->query($statsQuery);
     $statistics = [
         'total' => $totalStudents,
         'active' => 0,
-        'inactive' => 0,
-        'by_grade' => []
+        'inactive' => 0
     ];
     
     while ($row = $statsResult->fetch_assoc()) {
         if ($row['status'] === 'Active') {
-            $statistics['active']++;
+            $statistics['active'] += $row['count'];
         } else {
-            $statistics['inactive']++;
+            $statistics['inactive'] += $row['count'];
         }
-        
-        if (!empty($row['grade_level'])) {
-            if (!isset($statistics['by_grade'][$row['grade_level']])) {
-                $statistics['by_grade'][$row['grade_level']] = 0;
-            }
-            $statistics['by_grade'][$row['grade_level']] += $row['count'];
-        }
-    }
-    
-    // Get available classes for filter
-    $classesQuery = "SELECT id, name, grade_level FROM classes WHERE status = 'Active' ORDER BY grade_level, name";
-    $classesResult = $conn->query($classesQuery);
-    $classes = [];
-    while ($row = $classesResult->fetch_assoc()) {
-        $classes[] = $row;
     }
     
 } catch (Exception $e) {
@@ -148,56 +130,220 @@ try {
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/dashboard.css">
     <style>
+        .card {
+            background: #fff;
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .card-header {
+            background-color: #fff;
+            border-bottom: 1px solid rgba(0,0,0,0.125);
+            padding: 1rem 1.5rem;
+        }
+
+        .card-header .btn-primary {
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-header .btn-primary i {
+            font-size: 1.25rem;
+        }
+
+        .modal-content {
+            border-radius: 0.5rem;
+            border: none;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        }
+
+        .modal-header {
+            padding: 1rem 1.5rem;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .modal-footer {
+            padding: 1rem 1.5rem;
+            background-color: #f8f9fa;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .form-label {
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-control, .form-select {
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem;
+            border: 1px solid #dee2e6;
+        }
+
+        .form-control:focus, .form-select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            border-radius: 0.375rem;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-color-hover);
+        }
+
+        .btn-secondary {
+            background-color: #fff;
+            color: var(--primary-color);
+            border: 1px solid var(--primary-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--primary-color-hover);
+            color: #fff;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+
         .student-stats {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
         }
+        
         .stat-card {
             background: #fff;
-            padding: 20px;
-            border-radius: 10px;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        
         .stat-card h3 {
-            margin: 0 0 10px 0;
+            margin: 0 0 0.75rem 0;
             color: #333;
+            font-size: 1rem;
+            font-weight: 600;
         }
+        
         .stat-value {
-            font-size: 24px;
-            font-weight: bold;
+            font-size: 1.75rem;
+            font-weight: 700;
             color: var(--primary-color);
+            margin: 0;
         }
-        .grade-list {
-            margin-top: 15px;
+
+        .table-responsive {
+            margin-top: 1rem;
         }
-        .grade-item {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            padding: 5px 0;
-            border-bottom: 1px solid #eee;
+
+        .table {
+            width: 100%;
+            margin-bottom: 0;
         }
-        .filters {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 20px;
+
+        .badge {
+            padding: 0.5em 0.75em;
+            font-weight: 500;
         }
-        .filter-select {
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            min-width: 150px;
+
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
         }
     </style>
 </head>
 <body>
     <div class="wrapper">
-        <?php include 'includes/sidebar.php'; ?>
+        <aside class="sidebar">
+            <div class="logo">
+                <i class='bx bxs-school'></i>
+                <span>School System</span>
+            </div>
+            
+            <nav class="nav-links">
+                <a href="index.php" class="nav-link">
+                    <i class='bx bxs-dashboard'></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="teachers.php" class="nav-link">
+                    <i class='bx bxs-user'></i>
+                    <span>Teachers</span>
+                </a>
+                <a href="students.php" class="nav-link active">
+                    <i class='bx bxs-graduation'></i>
+                    <span>Students</span>
+                </a>
+                <a href="classes.php" class="nav-link">
+                    <i class='bx bxs-school'></i>
+                    <span>Classes</span>
+                </a>
+                <a href="subjects.php" class="nav-link">
+                    <i class='bx bxs-book'></i>
+                    <span>Subjects</span>
+                </a>
+                <a href="timetable.php" class="nav-link">
+                    <i class='bx bxs-calendar'></i>
+                    <span>Timetable</span>
+                </a>
+                <a href="exams.php" class="nav-link">
+                    <i class='bx bxs-notepad'></i>
+                    <span>Exams</span>
+                </a>
+                <a href="settings.php" class="nav-link">
+                    <i class='bx bxs-cog'></i>
+                    <span>Settings</span>
+                </a>
+                <a href="../auth/logout.php" class="nav-link">
+                    <i class='bx bxs-log-out'></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+        </aside>
 
         <main class="main-content">
-            <?php include 'includes/header.php'; ?>
+            <header class="header">
+                <button class="toggle-sidebar">
+                    <i class='bx bx-menu'></i>
+                </button>
+                
+                <div class="search-box">
+                    <i class='bx bx-search'></i>
+                    <input type="text" placeholder="Search...">
+                </div>
+                
+                <div class="user-profile">
+                    <img src="https://ui-avatars.com/api/?name=<?php echo urlencode($admin['first_name'] . ' ' . $admin['last_name']); ?>&background=4361ee&color=fff" alt="Profile">
+                    <span><?php echo htmlspecialchars($admin['first_name'] . ' ' . $admin['last_name']); ?></span>
+                </div>
+            </header>
 
             <?php if (isset($error)): ?>
                 <div class="alert alert-danger" style="margin: 20px; padding: 15px; border-radius: 5px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24;">
@@ -205,144 +351,318 @@ try {
                     <?php echo htmlspecialchars($error); ?>
                 </div>
             <?php else: ?>
-                <!-- Student Statistics -->
-                <div class="student-stats">
-                    <div class="stat-card">
-                        <h3>Total Students</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['total']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Active Students</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['active']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Inactive Students</h3>
-                        <div class="stat-value"><?php echo number_format($statistics['inactive']); ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <h3>By Grade Level</h3>
-                        <div class="grade-list">
-                            <?php foreach ($statistics['by_grade'] as $grade => $count): ?>
-                                <div class="grade-item">
-                                    <span>Grade <?php echo htmlspecialchars($grade); ?></span>
-                                    <span><?php echo number_format($count); ?></span>
+                <div class="page-content">
+                    <div class="container-fluid">
+                        <div class="student-stats mb-4">
+                            <div class="stat-card">
+                                <h3>Total Students</h3>
+                                <p class="stat-value"><?php echo $statistics['total']; ?></p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Active Students</h3>
+                                <p class="stat-value"><?php echo $statistics['active']; ?></p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Inactive Students</h3>
+                                <p class="stat-value"><?php echo $statistics['inactive']; ?></p>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="card-title mb-0">Student Management</h5>
+                                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addStudentModal">
+                                    <i class='bx bx-plus'></i> Add New Student
+                                </button>
+                            </div>
+
+
+
+                           
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-striped" id="studentsTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Admission #</th>
+                                                <th>Name</th>
+                                                <th>Class</th>
+                                                <th>Gender</th>
+                                                <th>Phone</th>
+                                                <th>Email</th>
+                                                <th>Status</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($students as $student): ?>
+                                            <tr>
+                                                <td><?php echo htmlspecialchars($student['admission_number']); ?></td>
+                                                <td><?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></td>
+                                                <td><?php echo htmlspecialchars($student['class_id']); ?></td>
+                                                <td><?php echo htmlspecialchars($student['gender']); ?></td>
+                                                <td><?php echo htmlspecialchars($student['phone']); ?></td>
+                                                <td><?php echo htmlspecialchars($student['email']); ?></td>
+                                                <td>
+                                                    <span class="badge <?php echo strtolower($student['status']) === 'active' ? 'bg-success' : 'bg-danger'; ?>">
+                                                        <?php echo ucfirst(htmlspecialchars($student['status'])); ?>
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <button class="btn btn-sm btn-primary" onclick="editStudent(<?php echo $student['id']; ?>)">
+                                                        <i class='bx bx-edit'></i>
+                                                    </button>
+                                                    <button class="btn btn-sm btn-danger" onclick="deleteStudent(<?php echo $student['id']; ?>)">
+                                                        <i class='bx bx-trash'></i>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
                                 </div>
-                            <?php endforeach; ?>
+                            </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- Search and Filters -->
-                <div class="content-header">
-                    <div class="filters">
-                        <div class="search-box">
-                            <form method="GET" action="">
-                                <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search students...">
-                                <select name="class" class="filter-select">
-                                    <option value="">All Classes</option>
-                                    <?php foreach ($classes as $class): ?>
-                                        <option value="<?php echo $class['id']; ?>" <?php echo $class_filter == $class['id'] ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($class['name'] . ' (Grade ' . $class['grade_level'] . ')'); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <button type="submit"><i class='bx bx-search'></i></button>
-                            </form>
-                        </div>
-                    </div>
-                    <button class="add-button" onclick="location.href='add_student.php'">
-                        <i class='bx bx-plus'></i> Add Student
-                    </button>
-                </div>
-
-                <!-- Students Table -->
-                <div class="table-container">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Registration No.</th>
-                                <th>Name</th>
-                                <th>Class</th>
-                                <th>Email</th>
-                                <th>Phone</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($students as $student): ?>
-                                <tr>
-                                    <td><?php echo htmlspecialchars($student['registration_number']); ?></td>
-                                    <td><?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></td>
-                                    <td><?php echo htmlspecialchars($student['class_name'] . ' (Grade ' . $student['grade_level'] . ')'); ?></td>
-                                    <td><?php echo htmlspecialchars($student['email']); ?></td>
-                                    <td><?php echo htmlspecialchars($student['phone']); ?></td>
-                                    <td>
-                                        <span class="status-badge <?php echo strtolower($student['status']); ?>">
-                                            <?php echo htmlspecialchars($student['status']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="actions">
-                                        <a href="edit_student.php?id=<?php echo $student['id']; ?>" class="edit-btn">
-                                            <i class='bx bx-edit'></i>
-                                        </a>
-                                        <button class="delete-btn" onclick="deleteStudent(<?php echo $student['id']; ?>)">
-                                            <i class='bx bx-trash'></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-
-                    <!-- Pagination -->
-                    <?php if ($totalPages > 1): ?>
-                        <div class="pagination">
-                            <?php if ($page > 1): ?>
-                                <a href="?page=<?php echo ($page - 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($class_filter) ? '&class=' . urlencode($class_filter) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-left'></i>
-                                </a>
-                            <?php endif; ?>
-
-                            <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-                                <a href="?page=<?php echo $i; ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($class_filter) ? '&class=' . urlencode($class_filter) : ''; ?>" 
-                                   class="page-link <?php echo $i === $page ? 'active' : ''; ?>">
-                                    <?php echo $i; ?>
-                                </a>
-                            <?php endfor; ?>
-
-                            <?php if ($page < $totalPages): ?>
-                                <a href="?page=<?php echo ($page + 1); ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?><?php echo !empty($class_filter) ? '&class=' . urlencode($class_filter) : ''; ?>" class="page-link">
-                                    <i class='bx bx-chevron-right'></i>
-                                </a>
-                            <?php endif; ?>
-                        </div>
-                    <?php endif; ?>
                 </div>
             <?php endif; ?>
         </main>
     </div>
+    <div class="overlay"></div>
 
+    <div class="modal fade" id="addStudentModal" tabindex="-1" aria-labelledby="addStudentModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addStudentModalLabel">Add New Student</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addStudentForm">
+                        <div class="mb-3">
+                            <label for="firstName" class="form-label">First Name</label>
+                            <input type="text" class="form-control" id="firstName" name="first_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="lastName" class="form-label">Last Name</label>
+                            <input type="text" class="form-control" id="lastName" name="last_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="admissionNumber" class="form-label">Admission Number</label>
+                            <input type="text" class="form-control" id="admissionNumber" name="admission_number" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="class" class="form-label">Class</label>
+                            <select class="form-select" id="class" name="class_id" required>
+                                <?php
+                                // Fetch classes from database
+                                $classQuery = "SELECT id, name FROM classes WHERE status = 'Active'";
+                                $classResult = $conn->query($classQuery);
+                                while ($class = $classResult->fetch_assoc()) {
+                                    echo "<option value='" . $class['id'] . "'>" . htmlspecialchars($class['name']) . "</option>";
+                                }
+                                ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="email" name="email">
+                        </div>
+                        <div class="mb-3">
+                            <label for="phone" class="form-label">Phone</label>
+                            <input type="tel" class="form-control" id="phone" name="phone">
+                        </div>
+                        <div class="mb-3">
+                            <label for="status" class="form-label">Status</label>
+                            <select class="form-select" id="status" name="status" required>
+                                <option value="Active">Active</option>
+                                <option value="Inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="submit" form="addStudentForm" class="btn btn-primary">Add Student</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Student Modal -->
+    <div class="modal fade" id="editStudentModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Student</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editStudentForm">
+                        <input type="hidden" name="id">
+                        <div class="mb-3">
+                            <label class="form-label">First Name</label>
+                            <input type="text" class="form-control" name="first_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" class="form-control" name="last_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Date of Birth</label>
+                            <input type="date" class="form-control" name="date_of_birth" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Gender</label>
+                            <select class="form-select" name="gender" required>
+                                <option value="">Select Gender</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Class</label>
+                            <select class="form-select" name="class_id" required>
+                                <option value="">Select Class</option>
+                                <?php
+                                $classResult->data_seek(0);
+                                while ($class = $classResult->fetch_assoc()) {
+                                    echo "<option value='" . $class['id'] . "'>" . htmlspecialchars($class['name']) . "</option>";
+                                }
+                                ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Parent/Guardian Name</label>
+                            <input type="text" class="form-control" name="guardian_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Contact Number</label>
+                            <input type="tel" class="form-control" name="contact_number" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Address</label>
+                            <textarea class="form-control" name="address" required rows="3"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status" required>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="updateStudent()">Update Student</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
     <script>
+        $(document).ready(function() {
+            $('#studentsTable').DataTable({
+                pageLength: 10,
+                order: [[0, 'asc']]
+            });
+
+            // Handle form submission
+            $('#addStudentForm').on('submit', function(e) {
+                e.preventDefault();
+                $.ajax({
+                    url: 'api/add_student.php',
+                    type: 'POST',
+                    data: $(this).serialize(),
+                    success: function(response) {
+                        if (response.success) {
+                            $('#addStudentModal').modal('hide');
+                            location.reload();
+                        } else {
+                            alert('Error adding student: ' + response.message);
+                        }
+                    },
+                    error: function() {
+                        alert('Error adding student');
+                    }
+                });
+            });
+        });
+
+        function editStudent(id) {
+            $.ajax({
+                url: 'api/get_student.php',
+                type: 'GET',
+                data: { id: id },
+                success: function(response) {
+                    if (response.success) {
+                        const student = response.data;
+                        $('#editStudentId').val(student.id);
+                        $('#editFirstName').val(student.first_name);
+                        $('#editLastName').val(student.last_name);
+                        $('#editEmail').val(student.email);
+                        $('#editPhone').val(student.phone);
+                        $('#editAdmissionNumber').val(student.admission_number);
+                        $('#editClassId').val(student.class_id);
+                        $('#editGender').val(student.gender);
+                        $('#editDateOfBirth').val(student.date_of_birth);
+                        $('#editStatus').val(student.status);
+                        $('#editStudentModal').modal('show');
+                    } else {
+                        alert('Error fetching student data');
+                    }
+                },
+                error: function() {
+                    alert('Error fetching student data');
+                }
+            });
+        }
+
         function deleteStudent(id) {
             if (confirm('Are you sure you want to delete this student?')) {
-                fetch(`api/students/delete.php?id=${id}`, {
-                    method: 'DELETE'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        location.reload();
-                    } else {
-                        alert(data.message || 'Error deleting student');
+                $.ajax({
+                    url: 'api/delete_student.php',
+                    type: 'POST',
+                    data: { id: id },
+                    success: function(response) {
+                        if (response.success) {
+                            location.reload();
+                        } else {
+                            alert('Error deleting student');
+                        }
+                    },
+                    error: function() {
+                        alert('Error deleting student');
                     }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('An error occurred while deleting the student');
                 });
             }
         }
+
+        $('#editStudentForm').on('submit', function(e) {
+            e.preventDefault();
+            $.ajax({
+                url: 'api/update_student.php',
+                type: 'POST',
+                data: $(this).serialize(),
+                success: function(response) {
+                    if (response.success) {
+                        location.reload();
+                    } else {
+                        alert('Error updating student');
+                    }
+                },
+                error: function() {
+                    alert('Error updating student');
+                }
+            });
+        });
     </script>
 </body>
 </html>

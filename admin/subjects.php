@@ -1,13 +1,31 @@
 <?php
 session_start();
 require_once '../config/database.php';
-require_once '../includes/functions.php';
-requireAdmin();
+// require_once '../includes/functions.php';
+// requireAdmin();
  // Get admin info
- $admin_id = $_SESSION['user_id'];
- $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
- $stmt->execute([$admin_id]);
- $admin = $stmt->fetch();
+  // Get admin info
+  $admin_id = $_SESSION['user_id'];
+
+    
+  // Check if administrators table exists
+  $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
+  if ($table_check->num_rows === 0) {
+      throw new Exception('Database table "administrators" not found');
+  }
+
+  $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+  if (!$stmt) {
+      throw new Exception("Failed to prepare admin query: " . $conn->error);
+  }
+  
+  $stmt->bind_param('i', $admin_id);
+  if (!$stmt->execute()) {
+      throw new Exception("Failed to execute admin query: " . $stmt->error);
+  }
+  
+  $result = $stmt->get_result();
+  $admin = $result->fetch_assoc();
 ?>
 <!DOCTYPE html>
 <html lang="en">
