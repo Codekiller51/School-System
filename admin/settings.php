@@ -1,15 +1,35 @@
 <?php
 session_start();
 require_once '../config/database.php';
-require_once '../includes/functions.php';
-requireAdmin();
 
-// Fetch admin data
-$adminId = $_SESSION['admin_id'];
-$query = "SELECT * FROM administrators WHERE id = ?";
-$stmt = $conn->prepare($query);
-$stmt->execute([$adminId]);
-$admin = $stmt->fetch(PDO::FETCH_ASSOC);
+
+// Get admin info
+    $admin_id = $_SESSION['user_id'];
+    
+// Check if administrators table exists
+    $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
+    if ($table_check->num_rows === 0) {
+        throw new Exception('Database table "administrators" not found');
+    }
+        
+    $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+    if (!$stmt) {
+        throw new Exception("Failed to prepare admin query: " . $conn->error);
+    }
+    $stmt->bind_param('i', $admin_id);
+    if (!$stmt->execute()) {
+        throw new Exception("Failed to execute admin query: " . $stmt->error);
+    }
+    $result = $stmt->get_result();
+    $admin = $result->fetch_assoc();
+
+    if (!$admin) {
+        throw new Exception('Admin not found with ID: ' . $admin_id);
+    }
+
+
+
+
 
 // Fetch school settings
 $query = "SELECT * FROM school_settings LIMIT 1";

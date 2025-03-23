@@ -1,31 +1,52 @@
 <?php
 session_start();
 require_once '../config/database.php';
-// require_once '../includes/functions.php';
-// requireAdmin();
- // Get admin info
-  // Get admin info
-  $admin_id = $_SESSION['user_id'];
 
-    
-  // Check if administrators table exists
-  $table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
-  if ($table_check->num_rows === 0) {
-      throw new Exception('Database table "administrators" not found');
-  }
+// Get admin info
+$admin_id = $_SESSION['user_id'];
 
-  $stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
-  if (!$stmt) {
-      throw new Exception("Failed to prepare admin query: " . $conn->error);
-  }
-  
-  $stmt->bind_param('i', $admin_id);
-  if (!$stmt->execute()) {
-      throw new Exception("Failed to execute admin query: " . $stmt->error);
-  }
-  
-  $result = $stmt->get_result();
-  $admin = $result->fetch_assoc();
+// Check if administrators table exists
+$table_check = $conn->query("SHOW TABLES LIKE 'administrators'");
+if ($table_check->num_rows === 0) {
+    throw new Exception('Database table "administrators" not found');
+}
+
+$stmt = $conn->prepare("SELECT * FROM administrators WHERE id = ?");
+if (!$stmt) {
+    throw new Exception("Failed to prepare admin query: " . $conn->error);
+}
+
+$stmt->bind_param('i', $admin_id);
+if (!$stmt->execute()) {
+    throw new Exception("Failed to execute admin query: " . $stmt->error);
+}
+
+$result = $stmt->get_result();
+$admin = $result->fetch_assoc();
+
+// Fetch all subjects
+$subjects = [];
+$query = "SELECT * FROM subjects WHERE status = 'Active' ORDER BY name";
+$result = $conn->query($query);
+
+if ($result) {
+    while ($row = $result->fetch_assoc()) {
+        // Extract department and class level from description
+        $department = '';
+        $classLevel = '';
+        
+        if (preg_match('/Department: (.*?)\n/', $row['description'], $matches)) {
+            $department = $matches[1];
+        }
+        if (preg_match('/Class Level: (.*?)\n/', $row['description'], $matches)) {
+            $classLevel = $matches[1];
+        }
+        
+        $row['department'] = $department;
+        $row['class_level'] = $classLevel;
+        $subjects[] = $row;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -132,7 +153,23 @@ require_once '../config/database.php';
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <!-- Table content will be loaded dynamically -->
+                                                <?php foreach ($subjects as $subject): ?>
+                                                <tr>
+                                                    <td><?php echo htmlspecialchars($subject['code']); ?></td>
+                                                    <td><?php echo htmlspecialchars($subject['name']); ?></td>
+                                                    <td><?php echo htmlspecialchars($subject['class_level']); ?></td>
+                                                    <td><?php echo htmlspecialchars($subject['credits']); ?></td>
+                                                    <td><?php echo htmlspecialchars($subject['department']); ?></td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-primary edit-subject" data-id="<?php echo $subject['id']; ?>">
+                                                            <i class='bx bx-edit-alt'></i>
+                                                        </button>
+                                                        <button class="btn btn-sm btn-danger delete-subject" data-id="<?php echo $subject['id']; ?>">
+                                                            <i class='bx bx-trash'></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                                <?php endforeach; ?>
                                             </tbody>
                                         </table>
                                     </div>
@@ -196,7 +233,7 @@ require_once '../config/database.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="saveSubject">Save Subject</button>
+                    <button type="button" class="btn btn-primary" id="saveSubjectBtn">Save Subject</button>
                 </div>
             </div>
         </div>
@@ -207,6 +244,50 @@ require_once '../config/database.php';
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
-    <script src="js/script.js"></script>
+    <script>
+        $(document).ready(function() {
+            // Destroy existing DataTable if it exists
+            if ($.fn.DataTable.isDataTable('#subjectsTable')) {
+                $('#subjectsTable').DataTable().destroy();
+            }
+            
+            // Initialize DataTable
+            $('#subjectsTable').DataTable({
+                "order": [[1, "asc"]], // Sort by name by default
+                "pageLength": 10,
+                "language": {
+                    "emptyTable": "No subjects available"
+                }
+            });
+
+            // Handle subject form submission
+            $('#saveSubjectBtn').click(function() {
+                var form = $('#addSubjectForm');
+                var formData = new FormData(form[0]);
+
+                $.ajax({
+                    url: 'api/process_subject.php',
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function(response) {
+                        if (response.success) {
+                            alert('Subject added successfully!');
+                            $('#addSubjectModal').modal('hide');
+                            form[0].reset();
+                            // Reload the page to show the new subject
+                            location.reload();
+                        } else {
+                            alert('Error: ' + response.message);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        alert('Error: ' + error);
+                    }
+                });
+            });
+        });
+    </script>
 </body>
 </html>
